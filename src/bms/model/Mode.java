@@ -12,7 +12,7 @@ public enum Mode {
 	BEAT_10K(10, "beat-10k", 2, 12, new int[] { 5, 11 }), 
 	BEAT_14K(14, "beat-14k", 2, 16, new int[] { 7, 15 }), 
 	POPN_5K(9, "popn-5k", 1, 5, new int[] {}),
-	POPN_9K(9, "popn-9k", 1, 9, new int[] {}),
+	POPN_9K(9, "popn-9k", 2, 9, new int[] {}),
 	KEYBOARD_24K(25, "keyboard-24k", 1, 26, new int[] { 24, 25 }), 
 	KEYBOARD_24K_DOUBLE(50, "keyboard-24k-double", 2, 52, new int[] { 24, 25, 50, 51 }),
 	;
