@@ -11,7 +11,6 @@ import java.util.Map.Entry;
 import java.util.logging.Logger;
 import static bms.model.DecodeLog.State.*;
 
-import bms.model.BMSDecoder.TimeLineCache;
 import bms.model.Layer.EventType;
 import bms.model.bmson.*;
 
@@ -22,15 +21,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * 
  * @author exch
  */
-public class BMSONDecoder implements ChartDecoder {
+public class BMSONDecoder extends ChartDecoder {
 
 	private final ObjectMapper mapper = new ObjectMapper();
 
 	private BMSModel model;
-
-	private int lntype;
-
-	private List<DecodeLog> log = new ArrayList<DecodeLog>();
 
 	private final TreeMap<Integer, TimeLineCache> tlcache = new TreeMap<Integer, TimeLineCache>();
 
@@ -38,8 +33,9 @@ public class BMSONDecoder implements ChartDecoder {
 		this.lntype = lntype;
 	}
 
-	public BMSModel decode(File f) {
-		return decode(f.toPath());
+	public BMSModel decode(ChartInformation info) {
+		this.lntype = info.lntype;
+		return decode(info.path);
 	}
 
 	public BMSModel decode(Path f) {
@@ -73,11 +69,25 @@ public class BMSONDecoder implements ChartDecoder {
 		}
 		model.setSubArtist(subartist.toString());
 		model.setGenre(bmson.info.genre);
-		model.setJudgerank(bmson.info.judge_rank);
-		if (model.getJudgerank() < 5) {
-			log.add(new DecodeLog(WARNING, "judge_rankの定義が仕様通りでない可能性があります。judge_rank = " + model.getJudgerank()));
+
+		if (bmson.info.judge_rank < 0) {
+			log.add(new DecodeLog(WARNING, "judge_rankが0以下です。judge_rank = " + bmson.info.judge_rank));
+		} else if (bmson.info.judge_rank < 5) {
+			model.setJudgerank(bmson.info.judge_rank);
+			log.add(new DecodeLog(WARNING, "judge_rankの定義が仕様通りでない可能性があります。judge_rank = " + bmson.info.judge_rank));
+			model.setJudgerankType(BMSModel.JudgeRankType.BMS_RANK);
+		} else {
+			model.setJudgerank(bmson.info.judge_rank);
+			model.setJudgerankType(BMSModel.JudgeRankType.BMSON_JUDGERANK);
 		}
-		model.setTotal(bmson.info.total);
+
+		if(bmson.info.total > 0) {
+			model.setTotal(bmson.info.total);
+			model.setTotalType(BMSModel.TotalType.BMSON);
+		} else {
+			log.add(new DecodeLog(WARNING, "totalが0以下です。total = " + bmson.info.total));
+		}
+
 		model.setBpm(bmson.info.init_bpm);
 		model.setPlaylevel(String.valueOf(bmson.info.level));
 		model.setMode(Mode.BEAT_7K);
@@ -106,7 +116,6 @@ public class BMSONDecoder implements ChartDecoder {
 		}
 		List<LongNote>[] lnlist = new List[model.getMode().key];
 		Map<bms.model.bmson.Note, LongNote> lnup = new HashMap();
-		model.setLntype(lntype);
 
 		model.setBanner(bmson.info.banner_image);
 		model.setBackbmp(bmson.info.back_image);
@@ -166,7 +175,7 @@ public class BMSONDecoder implements ChartDecoder {
 			}
 		}
 
-		String[] wavmap = new String[bmson.sound_channels.length];
+		String[] wavmap = new String[bmson.sound_channels.length + bmson.key_channels.length + bmson.mine_channels.length];
 		int id = 0;
 		long starttime = 0;
 		for (SoundChannel sc : bmson.sound_channels) {
@@ -298,6 +307,58 @@ public class BMSONDecoder implements ChartDecoder {
 			}
 			id++;
 		}
+		
+		for (MineChannel sc : bmson.key_channels) {
+			wavmap[id] = sc.name;
+			Arrays.sort(sc.notes, comparator);
+			final int length = sc.notes.length;
+			for (int i = 0; i < length; i++) {
+				final bms.model.bmson.MineNote n = sc.notes[i];
+				TimeLine tl = getTimeLine(n.y, resolution);
+
+				final int key = n.x > 0 && n.x <= keyassign.length ? keyassign[n.x - 1] : -1;
+				if (key >= 0) {
+					// BGノート
+					tl.setHiddenNote(key, new NormalNote(id));
+				}
+			}
+			id++;
+		}
+		for (MineChannel sc : bmson.mine_channels) {
+			wavmap[id] = sc.name;
+			Arrays.sort(sc.notes, comparator);
+			final int length = sc.notes.length;
+			for (int i = 0; i < length; i++) {
+				final bms.model.bmson.MineNote n = sc.notes[i];
+				TimeLine tl = getTimeLine(n.y, resolution);
+
+				final int key = n.x > 0 && n.x <= keyassign.length ? keyassign[n.x - 1] : -1;
+				if (key >= 0) {
+					boolean insideln = false;
+					if (lnlist[key] != null) {
+						final double section = (n.y / resolution);
+						for (LongNote ln : lnlist[key]) {
+							if (ln.getSection() < section && section <= ln.getPair().getSection()) {
+								insideln = true;
+								break;
+							}
+						}
+					}
+
+					if (insideln) {
+						log.add(new DecodeLog(WARNING,
+								"LN内に地雷ノートを定義しています - x :  " + n.x + " y : " + n.y));
+					} else if(tl.existNote(key)){
+						log.add(new DecodeLog(WARNING,
+								"地雷ノートを定義している位置に通常ノートが存在します - x :  " + n.x + " y : " + n.y));
+					} else {
+						tl.setNote(key, new MineNote(id, n.damage));						
+					}
+				}
+			}
+			id++;
+		}
+
 		model.setWavList(wavmap);
 		// BGA処理
 		if (bmson.bga != null && bmson.bga.bga_header != null) {
@@ -379,7 +440,8 @@ public class BMSONDecoder implements ChartDecoder {
 
 		Logger.getGlobal().fine("BMSONファイル解析完了 :" + f.toString() + " - TimeLine数:" + tlcache.size() + " 時間(ms):"
 				+ (System.currentTimeMillis() - currnttime));
-		model.setPath(f.toAbsolutePath().toString());
+		
+		model.setChartInformation(new ChartInformation(f, lntype, null));
 		return model;
 	}
 	

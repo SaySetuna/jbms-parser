@@ -16,19 +16,13 @@ import static bms.model.DecodeLog.State.*;
  * 
  * @author exch
  */
-public class BMSDecoder implements ChartDecoder {
-
-	private int lntype;
-
-	private List<DecodeLog> log = new ArrayList<DecodeLog>();
+public class BMSDecoder extends ChartDecoder {
 
 	final List<String> wavlist = new ArrayList<String>(36 * 36);
 	private final int[] wm = new int[36 * 36];
 
 	final List<String> bgalist = new ArrayList<String>(36 * 36);
 	private final int[] bm = new int[36 * 36];
-
-	private BMSGenerator generator;
 
 	public BMSDecoder() {
 		this(BMSModel.LNTYPE_LONGNOTE);
@@ -39,18 +33,13 @@ public class BMSDecoder implements ChartDecoder {
 		// 予約語の登録
 	}
 
-	public BMSModel decode(File f) {
-		return decode(f.toPath());
-	}
-
 	public BMSModel decode(Path f) {
 		Logger.getGlobal().fine("BMSファイル解析開始 :" + f.toString());
 		try {
-			BMSModel model = this.decode(f.toString(), Files.readAllBytes(f), f.toString().toLowerCase().endsWith(".pms"), null);
+			BMSModel model = this.decode(f, Files.readAllBytes(f), f.toString().toLowerCase().endsWith(".pms"), null);
 			if (model == null) {
 				return null;
 			}
-			model.setPath(f.toAbsolutePath().toString());
 			Logger.getGlobal().fine("BMSファイル解析完了 :" + f.toString() + " - TimeLine数:" + model.getAllTimes().length);
 			return model;
 		} catch (IOException e) {
@@ -59,6 +48,18 @@ public class BMSDecoder implements ChartDecoder {
 		}
 		return null;
 	}
+	
+	public BMSModel decode(ChartInformation info) {
+		try {
+			this.lntype = info.lntype;
+			return decode(info.path, Files.readAllBytes(info.path), info.path.toString().toLowerCase().endsWith(".pms"), info.selectedRandoms);
+		} catch (IOException e) {
+			log.add(new DecodeLog(ERROR, "BMSファイルが見つかりません"));
+			Logger.getGlobal().severe("BMSファイル解析中の例外 : " + e.getClass().getName() + " - " + e.getMessage());
+		}
+		return null;
+	}
+
 
 	private final List<String>[] lines = new List[1000];
 
@@ -86,7 +87,7 @@ public class BMSDecoder implements ChartDecoder {
 	 * @param data
 	 * @return
 	 */
-	private BMSModel decode(String path, byte[] data, boolean ispms, int[] random) {
+	private BMSModel decode(Path path, byte[] data, boolean ispms, int[] selectedRandom) {
 		log.clear();
 		final long time = System.currentTimeMillis();
 		BMSModel model = new BMSModel();
@@ -108,9 +109,7 @@ public class BMSDecoder implements ChartDecoder {
 		try (BufferedReader br = new BufferedReader(new InputStreamReader(
 				new DigestInputStream(new DigestInputStream(new ByteArrayInputStream(data), md5digest), sha256digest),
 				"MS932"));) {
-			if (ispms) {
-				model.setMode(Mode.POPN_9K);
-			}
+			model.setMode(ispms ? Mode.POPN_9K : Mode.BEAT_5K);
 			// Logger.getGlobal().info(
 			// "BMSデータ読み込み時間(ms) :" + (System.currentTimeMillis() - time));
 
@@ -131,152 +130,168 @@ public class BMSDecoder implements ChartDecoder {
 
 			skip.clear();
 			while ((line = br.readLine()) != null) {
-				if (line.length() < 2 || line.charAt(0) != '#') {
+				if (line.length() < 2) {
 					continue;
 				}
 
-				// line = line.substring(1, line.length());
-				// RANDOM制御系
-				if (matchesReserveWord(line, "RANDOM")) {
-					try {
-						final int r = Integer.parseInt(line.substring(8).trim());
-						randoms.add(r);
-						if (random != null) {
-							crandom.add(random[randoms.size() - 1]);
-						} else {
-							crandom.add((int) (Math.random() * r) + 1);
-							srandoms.add(crandom.getLast());
-						}
-					} catch (NumberFormatException e) {
-						log.add(new DecodeLog(WARNING, "#RANDOMに数字が定義されていません"));
-					}
-				} else if (matchesReserveWord(line, "IF")) {
-					// RANDOM分岐開始
-					try {
-						skip.add((crandom.getLast() != Integer.parseInt(line.substring(4).trim())));
-					} catch (NumberFormatException e) {
-						log.add(new DecodeLog(WARNING, "#IFに数字が定義されていません"));
-					}
-				} else if (matchesReserveWord(line, "ENDIF")) {
-					if (!skip.isEmpty()) {
-						skip.removeLast();
-					} else {
-						log.add(new DecodeLog(WARNING, "ENDIFに対応するIFが存在しません: " + line));
-					}
-				} else if (matchesReserveWord(line, "ENDRANDOM")) {
-					if (!crandom.isEmpty()) {
-						crandom.removeLast();
-					} else {
-						log.add(new DecodeLog(WARNING, "ENDRANDOMに対応するRANDOMが存在しません: " + line));
-					}
-				} else if (skip.isEmpty() || !skip.getLast()) {
-					final char c = line.charAt(1);
-					if ('0' <= c && c <= '9' && line.length() > 6) {
-						// line = line.toUpperCase();
-						// 楽譜
-						final char c2 = line.charAt(2);
-						final char c3 = line.charAt(3);
-						if ('0' <= c2 && c2 <= '9' && '0' <= c3 && c3 <= '9') {
-							final int bar_index = (c - '0') * 100 + (c2 - '0') * 10 + (c3 - '0');
-							List<String> l = lines[bar_index];
-							if (l == null) {
-								l = lines[bar_index] = new ArrayList<String>();
+				if(line.charAt(0) == '#') {
+					// line = line.substring(1, line.length());
+					// RANDOM制御系
+					if (matchesReserveWord(line, "RANDOM")) {
+						try {
+							final int r = Integer.parseInt(line.substring(8).trim());
+							randoms.add(r);
+							if (selectedRandom != null) {
+								crandom.add(selectedRandom[randoms.size() - 1]);
+							} else {
+								crandom.add((int) (Math.random() * r) + 1);
+								srandoms.add(crandom.getLast());
 							}
-							l.add(line);
-							maxsec = (maxsec > bar_index) ? maxsec : bar_index;
-						} else {
-							log.add(new DecodeLog(WARNING, "小節に数字が定義されていません : " + line));
+						} catch (NumberFormatException e) {
+							log.add(new DecodeLog(WARNING, "#RANDOMに数字が定義されていません"));
 						}
-					} else if (matchesReserveWord(line, "BPM")) {
-						if (line.charAt(4) == ' ') {
-							// BPMは小数点のケースがある(FREEDOM DiVE)
+					} else if (matchesReserveWord(line, "IF")) {
+						// RANDOM分岐開始
+						if(!crandom.isEmpty()) {
 							try {
-								final String arg = line.substring(5).trim();
-								double bpm = Double.parseDouble(arg);
-								if(bpm > 0) {
-									model.setBpm(bpm);
-								} else {
-									log.add(new DecodeLog(WARNING, "#negative BPMはサポートされていません : " + line));
+								skip.add((crandom.getLast() != Integer.parseInt(line.substring(4).trim())));
+							} catch (NumberFormatException e) {
+								log.add(new DecodeLog(WARNING, "#IFに数字が定義されていません"));
+							}
+						} else {
+							log.add(new DecodeLog(WARNING, "#IFに対応する#RANDOMが定義されていません"));
+						}
+					} else if (matchesReserveWord(line, "ENDIF")) {
+						if (!skip.isEmpty()) {
+							skip.removeLast();
+						} else {
+							log.add(new DecodeLog(WARNING, "ENDIFに対応するIFが存在しません: " + line));
+						}
+					} else if (matchesReserveWord(line, "ENDRANDOM")) {
+						if (!crandom.isEmpty()) {
+							crandom.removeLast();
+						} else {
+							log.add(new DecodeLog(WARNING, "ENDRANDOMに対応するRANDOMが存在しません: " + line));
+						}
+					} else if (skip.isEmpty() || !skip.getLast()) {
+						final char c = line.charAt(1);
+						if ('0' <= c && c <= '9' && line.length() > 6) {
+							// line = line.toUpperCase();
+							// 楽譜
+							final char c2 = line.charAt(2);
+							final char c3 = line.charAt(3);
+							if ('0' <= c2 && c2 <= '9' && '0' <= c3 && c3 <= '9') {
+								final int bar_index = (c - '0') * 100 + (c2 - '0') * 10 + (c3 - '0');
+								List<String> l = lines[bar_index];
+								if (l == null) {
+									l = lines[bar_index] = new ArrayList<String>();
 								}
-							} catch (NumberFormatException e) {
-								log.add(new DecodeLog(WARNING, "#BPMに数字が定義されていません : " + line));
+								l.add(line);
+								maxsec = (maxsec > bar_index) ? maxsec : bar_index;
+							} else {
+								log.add(new DecodeLog(WARNING, "小節に数字が定義されていません : " + line));
 							}
-						} else {
-							try {
-								double bpm = Double.parseDouble(line.substring(7).trim());
-								if(bpm > 0) {
-									bpmtable.put(ChartDecoder.parseInt36(line, 4), bpm);
-								} else {
-									log.add(new DecodeLog(WARNING, "#negative BPMはサポートされていません : " + line));									
+						} else if (matchesReserveWord(line, "BPM")) {
+							if (line.charAt(4) == ' ') {
+								// BPMは小数点のケースがある(FREEDOM DiVE)
+								try {
+									final String arg = line.substring(5).trim();
+									double bpm = Double.parseDouble(arg);
+									if(bpm > 0) {
+										model.setBpm(bpm);
+									} else {
+										log.add(new DecodeLog(WARNING, "#negative BPMはサポートされていません : " + line));
+									}
+								} catch (NumberFormatException e) {
+									log.add(new DecodeLog(WARNING, "#BPMに数字が定義されていません : " + line));
 								}
-							} catch (NumberFormatException e) {
-								log.add(new DecodeLog(WARNING, "#BPMxxに数字が定義されていません : " + line));
+							} else {
+								try {
+									double bpm = Double.parseDouble(line.substring(7).trim());
+									if(bpm > 0) {
+										bpmtable.put(ChartDecoder.parseInt36(line, 4), bpm);
+									} else {
+										log.add(new DecodeLog(WARNING, "#negative BPMはサポートされていません : " + line));
+									}
+								} catch (NumberFormatException e) {
+									log.add(new DecodeLog(WARNING, "#BPMxxに数字が定義されていません : " + line));
+								}
 							}
-						}
-					} else if (matchesReserveWord(line, "WAV")) {
-						// 音源ファイル
-						if (line.length() >= 8) {
-							try {
-								final String file_name = line.substring(7).trim().replace('\\', '/');
-								wm[ChartDecoder.parseInt36(line, 4)] = wavlist.size();
-								wavlist.add(file_name);
-							} catch (NumberFormatException e) {
+						} else if (matchesReserveWord(line, "WAV")) {
+							// 音源ファイル
+							if (line.length() >= 8) {
+								try {
+									final String file_name = line.substring(7).trim().replace('\\', '/');
+									wm[ChartDecoder.parseInt36(line, 4)] = wavlist.size();
+									wavlist.add(file_name);
+								} catch (NumberFormatException e) {
+									log.add(new DecodeLog(WARNING, "#WAVxxは不十分な定義です : " + line));
+								}
+							} else {
 								log.add(new DecodeLog(WARNING, "#WAVxxは不十分な定義です : " + line));
 							}
-						} else {
-							log.add(new DecodeLog(WARNING, "#WAVxxは不十分な定義です : " + line));
-						}
-					} else if (matchesReserveWord(line, "BMP")) {
-						// BGAファイル
-						if (line.length() >= 8) {
-							try {
-								final String file_name = line.substring(7).trim().replace('\\', '/');
-								bm[ChartDecoder.parseInt36(line, 4)] = bgalist.size();
-								bgalist.add(file_name);
-							} catch (NumberFormatException e) {
-								log.add(new DecodeLog(WARNING, "#WAVxxは不十分な定義です : " + line));
-							}
-						} else {
-							log.add(new DecodeLog(WARNING, "#BMPxxは不十分な定義です : " + line));
-						}
-					} else if (matchesReserveWord(line, "STOP")) {
-						if (line.length() >= 9) {
-							try {
-								double stop = Double.parseDouble(line.substring(8).trim()) / 192;
-								if(stop < 0) {
-									stop = Math.abs(stop);
-									log.add(new DecodeLog(WARNING, "#negative STOPはサポートされていません : " + line));
+						} else if (matchesReserveWord(line, "BMP")) {
+							// BGAファイル
+							if (line.length() >= 8) {
+								try {
+									final String file_name = line.substring(7).trim().replace('\\', '/');
+									bm[ChartDecoder.parseInt36(line, 4)] = bgalist.size();
+									bgalist.add(file_name);
+								} catch (NumberFormatException e) {
+									log.add(new DecodeLog(WARNING, "#WAVxxは不十分な定義です : " + line));
 								}
-								stoptable.put(ChartDecoder.parseInt36(line, 5), stop);
-							} catch (NumberFormatException e) {
-								log.add(new DecodeLog(WARNING, "#STOPxxに数字が定義されていません : " + line));
+							} else {
+								log.add(new DecodeLog(WARNING, "#BMPxxは不十分な定義です : " + line));
 							}
-						} else {
-							log.add(new DecodeLog(WARNING, "#STOPxxは不十分な定義です : " + line));
-						}
-					} else if (matchesReserveWord(line, "SCROLL")) {
-						if (line.length() >= 11) {
-							try {
-								double scroll = Double.parseDouble(line.substring(10).trim());
-								scrolltable.put(ChartDecoder.parseInt36(line, 7), scroll);
-							} catch (NumberFormatException e) {
-								log.add(new DecodeLog(WARNING, "#SCROLLxxに数字が定義されていません : " + line));
-							}
-						} else {
-							log.add(new DecodeLog(WARNING, "#SCROLLxxは不十分な定義です : " + line));
-						}
-					} else {
-						for (CommandWord cw : CommandWord.values()) {
-							if (line.length() > cw.name().length() + 2 && matchesReserveWord(line, cw.name())) {
-								DecodeLog log = cw.execute(model, line.substring(cw.name().length() + 2).trim());
-								if (log != null) {
-									this.log.add(log);
-									Logger.getGlobal()
-											.warning(model.getTitle() + " - " + log.getMessage() + " : " + line);
+						} else if (matchesReserveWord(line, "STOP")) {
+							if (line.length() >= 9) {
+								try {
+									double stop = Double.parseDouble(line.substring(8).trim()) / 192;
+									if(stop < 0) {
+										stop = Math.abs(stop);
+										log.add(new DecodeLog(WARNING, "#negative STOPはサポートされていません : " + line));
+									}
+									stoptable.put(ChartDecoder.parseInt36(line, 5), stop);
+								} catch (NumberFormatException e) {
+									log.add(new DecodeLog(WARNING, "#STOPxxに数字が定義されていません : " + line));
 								}
-								break;
+							} else {
+								log.add(new DecodeLog(WARNING, "#STOPxxは不十分な定義です : " + line));
+							}
+						} else if (matchesReserveWord(line, "SCROLL")) {
+							if (line.length() >= 11) {
+								try {
+									double scroll = Double.parseDouble(line.substring(10).trim());
+									scrolltable.put(ChartDecoder.parseInt36(line, 7), scroll);
+								} catch (NumberFormatException e) {
+									log.add(new DecodeLog(WARNING, "#SCROLLxxに数字が定義されていません : " + line));
+								}
+							} else {
+								log.add(new DecodeLog(WARNING, "#SCROLLxxは不十分な定義です : " + line));
+							}
+						} else {
+							for (CommandWord cw : CommandWord.values()) {
+								if (line.length() > cw.name().length() + 2 && matchesReserveWord(line, cw.name())) {
+									DecodeLog log = cw.execute(model, line.substring(cw.name().length() + 2).trim());
+									if (log != null) {
+										this.log.add(log);
+										Logger.getGlobal()
+												.warning(model.getTitle() + " - " + log.getMessage() + " : " + line);
+									}
+									break;
+								}
 							}
 						}
+					}
+				} else if(line.charAt(0) == '%') {
+					final int index = line.indexOf(' ');
+					if(index > 0 && line.length() > index + 1) {
+						model.getValues().put(line.substring(1, index), line.substring(index + 1));
+					}
+				} else if(line.charAt(0) == '@') {
+					final int index = line.indexOf(' ');
+					if(index > 0 && line.length() > index + 1) {
+						model.getValues().put(line.substring(1, index), line.substring(index + 1));
 					}
 				}
 			}
@@ -326,9 +341,11 @@ public class BMSDecoder implements ChartDecoder {
 				}
 			}
 
-			model.setLntype(lntype);
+			if (model.getTotalType() != BMSModel.TotalType.BMS) {
+				log.add(new DecodeLog(WARNING, "TOTALが未定義です"));
+			}
 			if (model.getTotal() <= 60.0) {
-				log.add(new DecodeLog(WARNING, "TOTALが未定義か、値が少なすぎます"));
+				log.add(new DecodeLog(WARNING, "TOTAL値が少なすぎます"));
 			}
 			if (tl.length > 0) {
 				if (tl[tl.length - 1].getTime() >= model.getLastTime() + 30000) {
@@ -346,20 +363,15 @@ public class BMSDecoder implements ChartDecoder {
 			log.add(new DecodeLog(INFO, "#PLAYER定義が1にもかかわらず2P側のノーツ定義が存在します"));
 			Logger.getGlobal().fine("BMSデータ解析時間(ms) :" + (System.currentTimeMillis() - time));
 
-			if (random == null) {
-				random = new int[randoms.size()];
-				final Iterator<Integer> ri = randoms.iterator();
-				for (int i = 0; i < random.length; i++) {
-					random[i] = ri.next();
+			if (selectedRandom == null) {
+				selectedRandom = new int[srandoms.size()];
+				final Iterator<Integer> ri = srandoms.iterator();
+				for (int i = 0; i < selectedRandom.length; i++) {
+					selectedRandom[i] = ri.next();
 				}
-				generator = new BMSGenerator(data, ispms, random);
 			}
-			random = new int[srandoms.size()];
-			final Iterator<Integer> ri = srandoms.iterator();
-			for (int i = 0; i < random.length; i++) {
-				random[i] = ri.next();
-			}
-			model.setRandom(random);
+			
+			model.setChartInformation(new ChartInformation(path, lntype, selectedRandom));
 			return model;
 		} catch (IOException e) {
 			log.add(new DecodeLog(ERROR, "BMSファイルへのアクセスに失敗しました"));
@@ -389,10 +401,6 @@ public class BMSDecoder implements ChartDecoder {
 		return true;
 	}
 
-	public BMSGenerator getBMSGenerator() {
-		return generator;
-	}
-
 	/**
 	 * バイトデータを16進数文字列表現に変換する
 	 * 
@@ -407,22 +415,6 @@ public class BMSDecoder implements ChartDecoder {
 			sb.append(Character.forDigit(b & 0xf, 16));
 		}
 		return sb.toString();
-	}
-
-	public DecodeLog[] getDecodeLog() {
-		return log.toArray(new DecodeLog[log.size()]);
-	}
-	
-	
-	public static class TimeLineCache {
-		
-		public final double time;
-		public final TimeLine timeline;
-		
-		public TimeLineCache(double time, TimeLine timeline) {
-			this.time = time;
-			this.timeline = timeline;
-		}
 	}
 }
 
@@ -482,13 +474,11 @@ enum CommandWord {
 	},
 	RANK {
 		public DecodeLog execute(BMSModel model, String arg) {
-			if (model.getJudgerank() >= 10) {
-				return null;
-			}
 			try {
 				final int rank = Integer.parseInt(arg);
 				if (rank >= 0 && rank < 5) {
 					model.setJudgerank(rank);
+					model.setJudgerankType(BMSModel.JudgeRankType.BMS_RANK);
 				} else {
 					return new DecodeLog(WARNING, "#RANKに規定外の数字が定義されています : " + rank);
 				}
@@ -502,10 +492,11 @@ enum CommandWord {
 		public DecodeLog execute(BMSModel model, String arg) {
 			try {
 				final int rank = Integer.parseInt(arg);
-				if (rank >= 10) {
+				if (rank >= 1) {
 					model.setJudgerank(rank);
+					model.setJudgerankType(BMSModel.JudgeRankType.BMS_DEFEXRANK);
 				} else {
-					return new DecodeLog(WARNING, "#DEFEXRANK 10以下はサポートしていません" + rank);
+					return new DecodeLog(WARNING, "#DEFEXRANK 1以下はサポートしていません" + rank);
 				}
 			} catch (NumberFormatException e) {
 				return new DecodeLog(WARNING, "#DEFEXRANKに数字が定義されていません");
@@ -516,7 +507,13 @@ enum CommandWord {
 	TOTAL {
 		public DecodeLog execute(BMSModel model, String arg) {
 			try {
-				model.setTotal(Double.parseDouble(arg));
+				final double total = Double.parseDouble(arg);
+				if(total > 0) {
+					model.setTotal(total);
+					model.setTotalType(BMSModel.TotalType.BMS);
+				} else {
+					return new DecodeLog(WARNING, "#TOTALが0以下です");
+				}
 			} catch (NumberFormatException e) {
 				return new DecodeLog(WARNING, "#TOTALに数字が定義されていません");
 			}

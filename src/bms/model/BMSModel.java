@@ -1,5 +1,8 @@
 package bms.model;
 
+import java.util.HashMap;
+import java.util.Map;
+
 /**
  * BMSモデル
  * 
@@ -7,10 +10,6 @@ package bms.model;
  */
 public class BMSModel implements Comparable {
 
-	/**
-	 * BMSのファイルパス
-	 */
-	private String path;
 	/**
 	 * プレイヤー数
 	 */
@@ -66,10 +65,14 @@ public class BMSModel implements Comparable {
 	 * 判定ランク
 	 */
 	private int judgerank = 2;
+
+	private JudgeRankType judgerankType = JudgeRankType.BMS_RANK;
 	/**
 	 * TOTAL値
 	 */
-	private double total;
+	private double total = 100;
+
+	private TotalType totalType = TotalType.BMSON;
 	/**
 	 * 標準ボリューム
 	 */
@@ -91,7 +94,6 @@ public class BMSModel implements Comparable {
 	 */
 	private String[] bgamap = new String[0];
 
-	private int lntype;
 	private int lnmode = LongNote.TYPE_UNDEFINED;
 
 	private int lnobj = -1;
@@ -105,7 +107,9 @@ public class BMSModel implements Comparable {
 	 */
 	private TimeLine[] timelines = new TimeLine[0];
 
-	private int[] random;
+	private ChartInformation info;
+
+	private Map<String, String> values = new HashMap<>();
 
 	public BMSModel() {
 	}
@@ -357,12 +361,24 @@ public class BMSModel implements Comparable {
 		this.bgamap = bgamap;
 	}
 
-	public int[] getRandom() {
-		return random;
+	public ChartInformation getChartInformation() {
+		return info;
 	}
 
-	public void setRandom(int[] random) {
-		this.random = random;
+	public void setChartInformation(ChartInformation info) {
+		this.info = info;
+	}
+	
+	public int[] getRandom() {
+		return info != null ? info.selectedRandoms : null;
+	}
+	
+	public String getPath() {
+		return info != null && info.path != null ? info.path.toString() : null;
+	}
+	
+	public int getLntype() {
+		return info != null ? info.lntype : LNTYPE_LONGNOTE;
 	}
 
 	public String getStagefile() {
@@ -389,22 +405,6 @@ public class BMSModel implements Comparable {
 		this.backbmp = backbmp;
 	}
 
-	public int getLntype() {
-		return lntype;
-	}
-
-	public void setLntype(int lntype) {
-		this.lntype = lntype;
-	}
-
-	public String getPath() {
-		return path;
-	}
-
-	public void setPath(String path) {
-		this.path = path;
-	}
-	
 	public int getTotalNotes() {
 		return BMSModelUtils.getTotalNotes(this);
 	}
@@ -481,7 +481,11 @@ public class BMSModel implements Comparable {
 	public void setLnmode(int lnmode) {
 		this.lnmode = lnmode;
 	}
-	
+
+	public Map<String, String> getValues() {
+		return values;
+	}
+
 	public String toChartString() {
 		StringBuilder sb = new StringBuilder();
 		sb.append("JUDGERANK:" + judgerank + "\n");
@@ -539,5 +543,29 @@ public class BMSModel implements Comparable {
 			}
 		}
 		return sb.toString();
+	}
+
+	public JudgeRankType getJudgerankType() {
+		return judgerankType;
+	}
+
+	public void setJudgerankType(JudgeRankType judgerankType) {
+		this.judgerankType = judgerankType;
+	}
+
+	public TotalType getTotalType() {
+		return totalType;
+	}
+
+	public void setTotalType(TotalType totalType) {
+		this.totalType = totalType;
+	}
+
+	public enum JudgeRankType {
+		BMS_RANK, BMS_DEFEXRANK, BMSON_JUDGERANK;
+	}
+
+	public enum TotalType {
+		BMS, BMSON;
 	}
 }
